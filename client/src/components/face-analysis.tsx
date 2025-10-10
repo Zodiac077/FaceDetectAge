@@ -1,12 +1,14 @@
 import { useState, useRef, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useFaceApi } from '@/hooks/use-face-api';
-import { FaceDetectionResult, AnalysisStats } from '@shared/schema';
+import { FaceDetectionResult, AnalysisStats, type FaceAnalysis as FaceAnalysisType } from '@shared/schema';
 import { calculateAnalysisStats, getConfidenceLevel, getConfidenceLevelColor, drawFaceOverlays, downloadResults } from '@/lib/face-api-utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { apiRequest, queryClient } from '@/lib/queryClient';
 import { 
   Upload, 
   Image as ImageIcon, 
@@ -24,7 +26,8 @@ import {
   Trash2,
   Lock,
   CheckCircle,
-  Cog
+  Cog,
+  History
 } from 'lucide-react';
 
 export default function FaceAnalysis() {
@@ -35,11 +38,44 @@ export default function FaceAnalysis() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [imageName, setImageName] = useState<string>('');
+  const [showHistory, setShowHistory] = useState(false);
 
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { isLoaded, isLoading, error, detectFaces } = useFaceApi();
   const { toast } = useToast();
+
+  const { data: dbHistory } = useQuery<FaceAnalysisType[]>({
+    queryKey: ['/api/analyses'],
+    enabled: showHistory
+  });
+
+  // Get local storage history
+  const getLocalHistory = (): FaceAnalysisType[] => {
+    if (!showHistory) return [];
+    try {
+      return JSON.parse(localStorage.getItem('faceAnalysisHistory') || '[]');
+    } catch {
+      return [];
+    }
+  };
+
+  // Merge database and local storage history
+  const history = showHistory ? [...getLocalHistory(), ...(dbHistory || [])] : [];
+
+  const saveAnalysisMutation = useMutation({
+    mutationFn: async (data: { imageFileName: string; imageDimensions: { width: number; height: number }; detectedFaces: FaceDetectionResult[]; processingTime?: string }) => {
+      const res = await apiRequest('POST', '/api/analyses', data);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/analyses'] });
+      toast({
+        title: "Analysis saved",
+        description: "Your face analysis has been saved to history."
+      });
+    }
+  });
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
@@ -115,6 +151,33 @@ export default function FaceAnalysis() {
         title: "Analysis complete",
         description: `Successfully detected ${faces.length} face${faces.length !== 1 ? 's' : ''} in the image.`,
       });
+
+      // Save to database and local storage
+      if (imageDimensions) {
+        const analysisData = {
+          imageFileName: imageName,
+          imageDimensions,
+          detectedFaces: faces,
+          processingTime: `${(endTime - startTime) / 1000}s`
+        };
+        
+        // Save to database
+        saveAnalysisMutation.mutate(analysisData);
+        
+        // Save to local storage
+        const localHistory = JSON.parse(localStorage.getItem('faceAnalysisHistory') || '[]');
+        const newAnalysis = {
+          id: crypto.randomUUID(),
+          ...analysisData,
+          analysisTimestamp: new Date().toISOString()
+        };
+        localHistory.unshift(newAnalysis);
+        // Keep only last 10 analyses in local storage
+        if (localHistory.length > 10) {
+          localHistory.pop();
+        }
+        localStorage.setItem('faceAnalysisHistory', JSON.stringify(localHistory));
+      }
 
     } catch (err) {
       console.error('Analysis error:', err);
@@ -456,6 +519,54 @@ export default function FaceAnalysis() {
             </CardContent>
           </Card>
         )}
+
+        {/* History Panel */}
+        <Card>
+          <CardContent className="p-6">
+            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
+              <History className="text-primary mr-2 w-5 h-5" />
+              Analysis History
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={() => setShowHistory(!showHistory)}
+                data-testid="button-toggle-history"
+              >
+                {showHistory ? 'Hide' : 'Show'}
+              </Button>
+            </h3>
+            
+            {showHistory && (
+              <div className="space-y-3">
+                {history && history.length > 0 ? (
+                  history.map((analysis) => (
+                    <div 
+                      key={analysis.id} 
+                      className="border border-border rounded-lg p-3 hover:bg-muted/30 transition-colors cursor-pointer"
+                      data-testid={`history-item-${analysis.id}`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <p className="font-medium text-foreground text-sm">{analysis.imageFileName}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {new Date(analysis.analysisTimestamp).toLocaleDateString()} at {new Date(analysis.analysisTimestamp).toLocaleTimeString()}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-foreground">{analysis.detectedFaces.length} faces</p>
+                          <p className="text-xs text-muted-foreground">{analysis.processingTime}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">No analysis history yet</p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Technical Information */}

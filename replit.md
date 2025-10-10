@@ -63,10 +63,19 @@ Preferred communication style: Simple, everyday language.
 - File system restrictions for security
 - Hot reload for both client and server code
 
+## Recent Changes (October 10, 2025)
+
+### History & Persistence Feature
+- Added PostgreSQL database integration with Drizzle ORM
+- Created API endpoints for saving and retrieving face analyses
+- Implemented analysis history panel in UI with toggle show/hide
+- Face analyses are automatically saved to database after detection
+- History displays last 10 analyses with timestamps and face counts
+
 ## External Dependencies
 
 ### Database & Storage
-- **Neon Database** - Serverless PostgreSQL database hosting
+- **Neon Database** - Serverless PostgreSQL database hosting (now connected and active)
 - **Drizzle Kit** - Database migrations and schema management
 
 ### AI/ML Services
