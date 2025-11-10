@@ -8,8 +8,10 @@ export function calculateAnalysisStats(
   const totalFaces = faces.length;
   
   const avgConfidence = totalFaces > 0 
-    ? Math.round(faces.reduce((sum, face) => 
-        sum + (face.ageConfidence + face.genderConfidence) / 2, 0) / totalFaces)
+  ? Math.round(faces.reduce((sum, face) => {
+    const combined = Math.round((face.ageConfidence + face.genderConfidence) / 2);
+    return sum + combined;
+    }, 0) / totalFaces)
     : 0;
 
   return {
@@ -42,37 +44,54 @@ export function drawFaceOverlays(
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  // Set canvas dimensions to match image
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  // Determine displayed image size (CSS size) vs natural size
+  const displayWidth = image.clientWidth || image.width || image.naturalWidth;
+  const displayHeight = image.clientHeight || image.height || image.naturalHeight;
 
-  // Draw the image
-  ctx.drawImage(image, 0, 0);
+  // Set canvas pixel dimensions to match the displayed size for crisp overlay
+  canvas.width = Math.round(displayWidth);
+  canvas.height = Math.round(displayHeight);
+
+  // Clear canvas and draw the image scaled to the display size
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
   // Draw face boxes and labels
+  // If the detection boxes were computed in natural image coordinates,
+  // scale them to the displayed size.
+  const scaleX = canvas.width / image.naturalWidth;
+  const scaleY = canvas.height / image.naturalHeight;
+
   faces.forEach((face) => {
     const { x, y, width, height } = face.box;
+    const sx = x * scaleX;
+    const sy = y * scaleY;
+    const sw = width * scaleX;
+    const sh = height * scaleY;
     
     // Draw bounding box
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, width, height);
+  ctx.strokeRect(sx, sy, sw, sh);
     
-    // Draw semi-transparent overlay
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
-    ctx.fillRect(x, y, width, height);
+  // Draw semi-transparent overlay
+  ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
+  ctx.fillRect(sx, sy, sw, sh);
     
-    // Draw label background
-    const label = `${face.gender}, ${face.age} (${Math.round((face.ageConfidence + face.genderConfidence) / 2)}%)`;
+  // Draw label background — show age-specific confidence so it matches the
+  // age confidence displayed in the Results panel.
+  const label = `${face.gender}, ${face.age} (Age ${face.ageConfidence}%)`;
     ctx.font = '12px Inter, sans-serif';
     const textWidth = ctx.measureText(label).width;
     
     ctx.fillStyle = '#10b981';
-    ctx.fillRect(x, y - 24, textWidth + 16, 20);
+    const labelX = sx;
+    const labelY = sy - 24;
+    ctx.fillRect(labelX, labelY, textWidth + 16, 20);
     
     // Draw label text
     ctx.fillStyle = 'white';
-    ctx.fillText(label, x + 8, y - 8);
+    ctx.fillText(label, labelX + 8, labelY + 16);
   });
 }
 

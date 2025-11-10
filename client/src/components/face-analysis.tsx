@@ -38,30 +38,14 @@ export default function FaceAnalysis() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [imageName, setImageName] = useState<string>('');
-  const [showHistory, setShowHistory] = useState(false);
+  // history UI removed per request
 
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { isLoaded, isLoading, error, detectFaces } = useFaceApi();
   const { toast } = useToast();
 
-  const { data: dbHistory } = useQuery<FaceAnalysisType[]>({
-    queryKey: ['/api/analyses'],
-    enabled: showHistory
-  });
-
-  // Get local storage history
-  const getLocalHistory = (): FaceAnalysisType[] => {
-    if (!showHistory) return [];
-    try {
-      return JSON.parse(localStorage.getItem('faceAnalysisHistory') || '[]');
-    } catch {
-      return [];
-    }
-  };
-
-  // Merge database and local storage history
-  const history = showHistory ? [...getLocalHistory(), ...(dbHistory || [])] : [];
+  // history handling removed
 
   const saveAnalysisMutation = useMutation({
     mutationFn: async (data: { imageFileName: string; imageDimensions: { width: number; height: number }; detectedFaces: FaceDetectionResult[]; processingTime?: string }) => {
@@ -136,15 +120,21 @@ export default function FaceAnalysis() {
       setAnalysisProgress(100);
 
       setDetectedFaces(faces);
-      
-      if (imageDimensions) {
-        const stats = calculateAnalysisStats(faces, endTime - startTime, imageDimensions);
-        setAnalysisStats(stats);
-      }
 
-      // Draw overlays on canvas
-      if (canvasRef.current && imageRef.current) {
-        drawFaceOverlays(canvasRef.current, imageRef.current, faces);
+      // Use the provided image dimensions if available, otherwise fall back
+      // to the actual loaded image's natural dimensions. Relying on the
+      // React state `imageDimensions` right after calling setImageDimensions
+      // can be unreliable because state updates are asynchronous.
+      const dims = imageDimensions ?? { width: image.naturalWidth, height: image.naturalHeight };
+      const stats = calculateAnalysisStats(faces, endTime - startTime, dims);
+      setAnalysisStats(stats);
+
+      // Draw overlays on canvas. Prefer the DOM imageRef if it's available
+      // (so the overlay aligns to the visible image). If the DOM img isn't
+      // ready yet, fall back to the loaded image object.
+      const imgToDraw = imageRef.current ?? image;
+      if (canvasRef.current && imgToDraw) {
+        drawFaceOverlays(canvasRef.current, imgToDraw, faces);
       }
 
       toast({
@@ -152,32 +142,30 @@ export default function FaceAnalysis() {
         description: `Successfully detected ${faces.length} face${faces.length !== 1 ? 's' : ''} in the image.`,
       });
 
-      // Save to database and local storage
-      if (imageDimensions) {
-        const analysisData = {
-          imageFileName: imageName,
-          imageDimensions,
-          detectedFaces: faces,
-          processingTime: `${(endTime - startTime) / 1000}s`
-        };
-        
-        // Save to database
-        saveAnalysisMutation.mutate(analysisData);
-        
-        // Save to local storage
-        const localHistory = JSON.parse(localStorage.getItem('faceAnalysisHistory') || '[]');
-        const newAnalysis = {
-          id: crypto.randomUUID(),
-          ...analysisData,
-          analysisTimestamp: new Date().toISOString()
-        };
-        localHistory.unshift(newAnalysis);
-        // Keep only last 10 analyses in local storage
-        if (localHistory.length > 10) {
-          localHistory.pop();
-        }
-        localStorage.setItem('faceAnalysisHistory', JSON.stringify(localHistory));
+      // Save to database and local storage using the resolved dimensions
+      const analysisData = {
+        imageFileName: imageName,
+        imageDimensions: dims,
+        detectedFaces: faces,
+        processingTime: `${(endTime - startTime) / 1000}s`
+      };
+
+      // Save to database
+      saveAnalysisMutation.mutate(analysisData);
+
+      // Save to local storage
+      const localHistory = JSON.parse(localStorage.getItem('faceAnalysisHistory') || '[]');
+      const newAnalysis = {
+        id: crypto.randomUUID(),
+        ...analysisData,
+        analysisTimestamp: new Date().toISOString()
+      };
+      localHistory.unshift(newAnalysis);
+      // Keep only last 10 analyses in local storage
+      if (localHistory.length > 10) {
+        localHistory.pop();
       }
+      localStorage.setItem('faceAnalysisHistory', JSON.stringify(localHistory));
 
     } catch (err) {
       console.error('Analysis error:', err);
@@ -217,6 +205,9 @@ export default function FaceAnalysis() {
     setImageDimensions(null);
     setImageName('');
   };
+
+  // static image fit mode (set here to 'contain' or 'cover')
+  const IMAGE_FIT: 'contain' | 'cover' = 'contain';
 
   const handleExportData = () => {
     if (detectedFaces.length > 0) {
@@ -342,19 +333,22 @@ export default function FaceAnalysis() {
                   <p>No image uploaded yet</p>
                 </div>
               ) : (
-                <div className="relative inline-block w-full">
-                  <img 
-                    ref={imageRef}
-                    src={uploadedImage} 
-                    alt="Uploaded for analysis"
-                    className="rounded-lg shadow-md max-w-full h-auto mx-auto"
-                    data-testid="uploaded-image"
-                  />
-                  <canvas
-                    ref={canvasRef}
-                    className="absolute top-0 left-1/2 transform -translate-x-1/2 rounded-lg max-w-full h-auto"
-                    style={{ display: detectedFaces.length > 0 ? 'block' : 'none' }}
-                  />
+                <div className="relative w-full flex items-center justify-center">
+                  <div className="relative inline-block w-4/5 h-4/5">
+                    <img 
+                      ref={imageRef}
+                      src={uploadedImage} 
+                      alt="Uploaded for analysis"
+                      className={`rounded-lg shadow-md w-full h-full ${IMAGE_FIT === 'contain' ? 'object-contain' : 'object-cover'} block`}
+                      data-testid="uploaded-image"
+                    />
+                    <canvas
+                      ref={canvasRef}
+                      // position the canvas to overlay the image element
+                      className="absolute top-0 left-0 rounded-lg pointer-events-none w-full h-full"
+                      style={{ display: detectedFaces.length > 0 ? 'block' : 'none' }}
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -398,79 +392,82 @@ export default function FaceAnalysis() {
 
                 {/* Individual Face Results */}
                 <div className="space-y-4" data-testid="face-results">
-                  {detectedFaces.map((face, index) => (
-                    <div 
-                      key={face.id} 
-                      className="border border-border rounded-lg p-4 hover:shadow-md transition-shadow duration-200"
-                      data-testid={`face-result-${index}`}
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
-                            <User className="text-primary w-6 h-6" />
-                          </div>
-                          <div>
-                            <h4 className="font-semibold text-foreground">Face #{index + 1}</h4>
-                            <p className="text-sm text-muted-foreground">
-                              Position: ({Math.round(face.box.x)}, {Math.round(face.box.y)})
-                            </p>
-                          </div>
-                        </div>
-                        <span className={`text-xs px-2 py-1 rounded-full ${
-                          getConfidenceLevel((face.ageConfidence + face.genderConfidence) / 2) === 'High Confidence' 
-                            ? 'bg-accent/10 text-accent' 
-                            : 'bg-secondary text-secondary-foreground'
-                        }`}>
-                          {getConfidenceLevel((face.ageConfidence + face.genderConfidence) / 2)}
-                        </span>
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-foreground">Age</span>
-                            <span className="text-sm font-mono font-semibold text-foreground" data-testid={`face-age-${index}`}>
-                              {face.age}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="flex-1 bg-secondary rounded-full h-2">
-                              <div 
-                                className="confidence-bar rounded-full h-2" 
-                                style={{ width: `${face.ageConfidence}%` }}
-                              ></div>
+                  {detectedFaces.map((face, index) => {
+                    const combinedConfidence = Math.round((face.ageConfidence + face.genderConfidence) / 2);
+                    return (
+                      <div 
+                        key={face.id} 
+                        className="border border-border rounded-lg p-4 hover:shadow-md transition-shadow duration-200"
+                        data-testid={`face-result-${index}`}
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
+                              <User className="text-primary w-6 h-6" />
                             </div>
-                            <span className="text-xs font-mono text-muted-foreground" data-testid={`face-age-confidence-${index}`}>
-                              {face.ageConfidence}%
-                            </span>
+                            <div>
+                              <h4 className="font-semibold text-foreground">Face #{index + 1}</h4>
+                              <p className="text-sm text-muted-foreground">
+                                Position: ({Math.round(face.box.x)}, {Math.round(face.box.y)})
+                              </p>
+                            </div>
                           </div>
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            getConfidenceLevel(combinedConfidence) === 'High Confidence' 
+                              ? 'bg-accent/10 text-accent' 
+                              : 'bg-secondary text-secondary-foreground'
+                          }`}>
+                            {getConfidenceLevel(combinedConfidence)} · {combinedConfidence}%
+                          </span>
                         </div>
                         
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-foreground">Gender</span>
-                            <span className="text-sm font-semibold text-foreground flex items-center" data-testid={`face-gender-${index}`}>
-                              <span className={`mr-1 ${face.gender === 'male' ? 'text-blue-500' : 'text-pink-500'}`}>
-                                {face.gender === 'male' ? '♂' : '♀'}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-foreground">Age</span>
+                              <span className="text-sm font-mono font-semibold text-foreground" data-testid={`face-age-${index}`}>
+                                {face.age}
                               </span>
-                              {face.gender.charAt(0).toUpperCase() + face.gender.slice(1)}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="flex-1 bg-secondary rounded-full h-2">
-                              <div 
-                                className="confidence-bar rounded-full h-2" 
-                                style={{ width: `${face.genderConfidence}%` }}
-                              ></div>
                             </div>
-                            <span className="text-xs font-mono text-muted-foreground" data-testid={`face-gender-confidence-${index}`}>
-                              {face.genderConfidence}%
-                            </span>
+                            <div className="flex items-center space-x-2">
+                              <div className="flex-1 bg-secondary rounded-full h-2">
+                                <div 
+                                  className="confidence-bar rounded-full h-2" 
+                                  style={{ width: `${face.ageConfidence}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-xs font-mono text-muted-foreground" data-testid={`face-age-confidence-${index}`}>
+                                {face.ageConfidence}%
+                              </span>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-foreground">Gender</span>
+                              <span className="text-sm font-semibold text-foreground flex items-center" data-testid={`face-gender-${index}`}>
+                                <span className={`mr-1 ${face.gender === 'male' ? 'text-blue-500' : 'text-pink-500'}`}>
+                                  {face.gender === 'male' ? '♂' : '♀'}
+                                </span>
+                                {face.gender.charAt(0).toUpperCase() + face.gender.slice(1)}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <div className="flex-1 bg-secondary rounded-full h-2">
+                                <div 
+                                  className="confidence-bar rounded-full h-2" 
+                                  style={{ width: `${face.genderConfidence}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-xs font-mono text-muted-foreground" data-testid={`face-gender-confidence-${index}`}>
+                                {face.genderConfidence}%
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -520,134 +517,10 @@ export default function FaceAnalysis() {
           </Card>
         )}
 
-        {/* History Panel */}
-        <Card>
-          <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <History className="text-primary mr-2 w-5 h-5" />
-              Analysis History
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto"
-                onClick={() => setShowHistory(!showHistory)}
-                data-testid="button-toggle-history"
-              >
-                {showHistory ? 'Hide' : 'Show'}
-              </Button>
-            </h3>
-            
-            {showHistory && (
-              <div className="space-y-3">
-                {history && history.length > 0 ? (
-                  history.map((analysis) => (
-                    <div 
-                      key={analysis.id} 
-                      className="border border-border rounded-lg p-3 hover:bg-muted/30 transition-colors cursor-pointer"
-                      data-testid={`history-item-${analysis.id}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium text-foreground text-sm">{analysis.imageFileName}</p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {new Date(analysis.analysisTimestamp).toLocaleDateString()} at {new Date(analysis.analysisTimestamp).toLocaleTimeString()}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-foreground">{analysis.detectedFaces.length} faces</p>
-                          <p className="text-xs text-muted-foreground">{analysis.processingTime}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">No analysis history yet</p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Analysis History removed */}
       </div>
 
-      {/* Technical Information */}
-      <div className="lg:col-span-2">
-        <Card>
-          <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Zap className="text-primary mr-2 w-5 h-5" />
-              Technical Information
-            </h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
-              <div>
-                <h4 className="font-semibold text-foreground mb-2">Model Information</h4>
-                <ul className="space-y-1 text-muted-foreground">
-                  <li className="flex items-center">
-                    <CheckCircle className="text-accent mr-2 w-4 h-4" />
-                    Face-API.js v0.22.2
-                  </li>
-                  <li className="flex items-center">
-                    <CheckCircle className="text-accent mr-2 w-4 h-4" />
-                    SSD MobileNet v1
-                  </li>
-                  <li className="flex items-center">
-                    <CheckCircle className="text-accent mr-2 w-4 h-4" />
-                    Age & Gender CNN
-                  </li>
-                  <li className="flex items-center">
-                    <CheckCircle className="text-accent mr-2 w-4 h-4" />
-                    68-point Face Landmarks
-                  </li>
-                </ul>
-              </div>
-              
-              <div>
-                <h4 className="font-semibold text-foreground mb-2">Processing Stats</h4>
-                <ul className="space-y-1 text-muted-foreground">
-                  <li className="flex items-center">
-                    <Clock className="text-primary mr-2 w-4 h-4" />
-                    Processing Time: {analysisStats?.processingTime || 'N/A'}
-                  </li>
-                  <li className="flex items-center">
-                    <ImageIcon className="text-primary mr-2 w-4 h-4" />
-                    Image Size: {analysisStats?.imageSize || 'N/A'}
-                  </li>
-                  <li className="flex items-center">
-                    <MemoryStick className="text-primary mr-2 w-4 h-4" />
-                    MemoryStick Usage: ~45MB
-                  </li>
-                  <li className="flex items-center">
-                    <Zap className="text-primary mr-2 w-4 h-4" />
-                    WebGL Acceleration
-                  </li>
-                </ul>
-              </div>
-              
-              <div>
-                <h4 className="font-semibold text-foreground mb-2">Privacy & Security</h4>
-                <ul className="space-y-1 text-muted-foreground">
-                  <li className="flex items-center">
-                    <ShieldCheck className="text-accent mr-2 w-4 h-4" />
-                    Client-side Processing
-                  </li>
-                  <li className="flex items-center">
-                    <KeyRound className="text-accent mr-2 w-4 h-4" />
-                    No Data Upload
-                  </li>
-                  <li className="flex items-center">
-                    <Trash2 className="text-accent mr-2 w-4 h-4" />
-                    Auto-delete Images
-                  </li>
-                  <li className="flex items-center">
-                    <Lock className="text-accent mr-2 w-4 h-4" />
-                    GDPR Compliant
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Technical Information removed */}
     </div>
   );
 }

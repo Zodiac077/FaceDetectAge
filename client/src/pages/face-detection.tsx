@@ -1,8 +1,30 @@
-import { useState } from 'react';
-import { Brain, Shield } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Brain, SunMoon } from 'lucide-react';
 import FaceAnalysis from '@/components/face-analysis';
 
 export default function FaceDetectionPage() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    // Tailwind is configured with `darkMode: ['class']` — toggle the
+    // `dark` class on the root element so dark styles apply.
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+
+    try { localStorage.setItem('theme', theme); } catch {}
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+
   return (
     <div className="min-h-screen bg-background text-foreground font-sans">
       {/* Header */}
@@ -19,10 +41,16 @@ export default function FaceDetectionPage() {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <div className="hidden sm:flex items-center space-x-2 text-sm text-muted-foreground">
-                <Shield className="text-accent w-4 h-4" />
-                <span>Powered by Face-API.js</span>
-              </div>
+              {/* Day/Night toggle placed where "Powered by Face-API.js" was */}
+              <button
+                className="flex items-center space-x-2 text-sm text-muted-foreground bg-muted/10 px-3 py-1 rounded"
+                onClick={toggleTheme}
+                aria-label="Toggle day/night theme"
+                data-testid="button-toggle-theme"
+              >
+                <SunMoon className="w-4 h-4" />
+                <span>{theme === 'light' ? 'Day' : 'Night'}</span>
+              </button>
             </div>
           </div>
         </div>
